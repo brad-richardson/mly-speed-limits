@@ -23,6 +23,8 @@ def _modal_speed(speeds: list[int]) -> int:
     counts: dict[int, int] = {}
     for s in speeds:
         counts[s] = counts.get(s, 0) + 1
+    # max by (count, -v): highest count wins; on tie, -v is largest for
+    # smallest v, so the lowest speed is chosen (conservative for safety).
     return max(counts, key=lambda v: (counts[v], -v))
 
 

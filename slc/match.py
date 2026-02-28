@@ -145,8 +145,9 @@ def match_edges_to_overture(
                     seg_coords[-1][1],
                 )
                 hdg_diff = angle_diff(edge_hdg, seg_hdg)
-                # Allow up to 45° for minor geometric deviations; reject clearly
-                # perpendicular or opposite-direction matches
+                # Reject perpendicular matches (45-135°).  Near-parallel (0-45°)
+                # and anti-parallel (135-180°) are kept — segments have no
+                # inherent direction, so opposite-travel is valid for two-way roads.
                 if hdg_diff > 45.0 and hdg_diff < 135.0:
                     continue
 

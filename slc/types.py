@@ -26,6 +26,7 @@ class SpeedSign:
     geometry: Point
     speed_mph: int
     raw_value: str
+    sign_type: str  # "standard", "led", "night", "complementary", or "unknown"
     confidence: float
     heading: float | None = None
 

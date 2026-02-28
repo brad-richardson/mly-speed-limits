@@ -12,9 +12,11 @@ def test_speed_sign_basic():
         geometry=Point(-111.89, 40.88),
         speed_mph=35,
         raw_value="regulatory--maximum-speed-limit--35",
+        sign_type="standard",
         confidence=0.95,
     )
     assert sign.speed_mph == 35
+    assert sign.sign_type == "standard"
     assert sign.heading is None
 
 
@@ -24,6 +26,7 @@ def test_speed_sign_with_heading():
         geometry=Point(-111.89, 40.88),
         speed_mph=25,
         raw_value="regulatory--maximum-speed-limit--25",
+        sign_type="standard",
         confidence=0.80,
         heading=270.0,
     )

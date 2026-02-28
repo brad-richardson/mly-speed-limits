@@ -14,7 +14,11 @@ Ground truth for evaluation comes directly from the Overture segment
 from __future__ import annotations
 
 import math
+import os
 import re
+import subprocess
+import tempfile
+import time
 from typing import Any
 
 import geopandas as gpd
@@ -34,9 +38,6 @@ _MLY_SIGN_TYPE_PATTERN = re.compile(
     r"(regulatory|complementary)--(maximum-speed-limit(?:-led)?|night-speed-limit)",
     re.IGNORECASE,
 )
-# Mapillary sign style suffixes: g1 = Vienna Convention (km/h in most
-# countries), g2 = MUTCD / US (mph), g3 = varies by country.
-_MLY_STYLE_PATTERN = re.compile(r"--g(\d+)$", re.IGNORECASE)
 _KMH_TO_MPH = 0.621371
 _DEFAULT_CRS = "EPSG:4326"
 
@@ -50,10 +51,9 @@ def _mly_get(
     endpoint: str, token: str, params: dict[str, Any], max_retries: int = 3
 ) -> dict[str, Any]:
     """Perform a single Mapillary Graph API GET request with retry."""
-    import time
-
     params = dict(params)
     params["access_token"] = token
+    last_exc: Exception | None = None
     for attempt in range(max_retries):
         try:
             resp = requests.get(
@@ -61,12 +61,15 @@ def _mly_get(
             )
             resp.raise_for_status()
             return resp.json()
-        except (requests.exceptions.ReadTimeout, requests.exceptions.HTTPError) as exc:
-            if isinstance(exc, requests.exceptions.HTTPError) and resp.status_code != 500:
-                raise
+        except (requests.exceptions.Timeout, requests.exceptions.HTTPError) as exc:
+            last_exc = exc
+            if isinstance(exc, requests.exceptions.HTTPError):
+                if exc.response is not None and exc.response.status_code != 500:
+                    raise
             if attempt == max_retries - 1:
                 raise
             time.sleep(2 ** attempt)
+    raise last_exc  # type: ignore[misc]  # unreachable, satisfies return type
 
 
 def _split_bbox(
@@ -91,6 +94,8 @@ def _mly_paginated_fetch(
     fields: str,
     extra_params: dict[str, Any] | None = None,
     limit: int = 2000,
+    _depth: int = 0,
+    _max_depth: int = 6,
 ) -> list[dict[str, Any]]:
     """Fetch results from a Mapillary endpoint, subdividing on 500 errors."""
     min_lon, min_lat, max_lon, max_lat = bbox
@@ -102,15 +107,27 @@ def _mly_paginated_fetch(
 
     try:
         data = _mly_get(endpoint, token, params)
-        return data.get("data", [])
+        results = data.get("data", [])
+        if len(results) >= limit:
+            import warnings
+
+            warnings.warn(
+                f"Mapillary returned {len(results)} results (limit={limit}) for "
+                f"bbox {bbox_str}; results may be truncated.",
+                stacklevel=2,
+            )
+        return results
     except requests.exceptions.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 500:
+            if _depth >= _max_depth:
+                raise
             all_data: list[dict[str, Any]] = []
             for sub_bbox in _split_bbox(bbox):
                 all_data.extend(
                     _mly_paginated_fetch(
                         endpoint, token, sub_bbox, fields,
                         extra_params, limit,
+                        _depth=_depth + 1, _max_depth=_max_depth,
                     )
                 )
             return all_data
@@ -135,6 +152,8 @@ def _parse_speed_mph(value: str, unit: str = "mph") -> int | None:
 
     Returns ``None`` when the value cannot be parsed.
     """
+    if unit not in ("mph", "kmh"):
+        raise ValueError(f"Unknown unit {unit!r}; expected 'mph' or 'kmh'")
     m = _MLY_SPEED_PATTERN.search(value)
     if not m:
         return None
@@ -192,13 +211,22 @@ def fetch_mapillary_signs(
         GeoDataFrame with columns
         ``id, geometry, speed_mph, raw_value, sign_type, confidence, heading``.
     """
-    raw_data = _mly_paginated_fetch(
-        "map_features",
-        token,
-        bbox,
-        fields="id,geometry,object_value,value",
-        extra_params=None,
-    )
+    # Fetch each sign family separately to use server-side filtering
+    raw_data: list[dict[str, Any]] = []
+    for prefix in (
+        "regulatory--maximum-speed-limit",
+        "complementary--maximum-speed-limit",
+        "regulatory--night-speed-limit",
+    ):
+        raw_data.extend(
+            _mly_paginated_fetch(
+                "map_features",
+                token,
+                bbox,
+                fields="id,geometry,object_value,value",
+                extra_params={"object_value": prefix},
+            )
+        )
 
     seen_ids: set[str] = set()
     rows: list[dict[str, Any]] = []
@@ -342,9 +370,6 @@ def fetch_overture_segments(
         GeoDataFrame with at minimum the columns
         ``id, geometry, class, subclass, names, speed_limits, connectors``.
     """
-    import subprocess
-    import tempfile
-
     min_lon, min_lat, max_lon, max_lat = bbox
     bbox_str = f"{min_lon},{min_lat},{max_lon},{max_lat}"
 
@@ -368,7 +393,6 @@ def fetch_overture_segments(
         subprocess.run(cmd, check=True)
         gdf = gpd.read_parquet(tmp_path)
     finally:
-        import os
         os.unlink(tmp_path)
     return gdf
 
