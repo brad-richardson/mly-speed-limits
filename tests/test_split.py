@@ -1,7 +1,6 @@
 """Tests for slc.split — sequence splitting."""
 
 import geopandas as gpd
-import pytest
 from shapely.geometry import LineString
 
 from slc.split import detect_turn_splits, split_all_sequences, split_sequence
@@ -87,7 +86,6 @@ def test_split_turn_resets_speed():
     turns = [half]
     edges = split_sequence("seq_1", line, snapped_signs=signs, turn_distances=turns)
     # After the turn, speed should reset
-    speeds = [e.speed_mph for e in edges]
     # Last edge (after turn) should have None
     assert edges[-1].speed_mph is None
 

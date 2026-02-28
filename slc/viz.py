@@ -13,7 +13,7 @@ from typing import Any
 # the library can be imported without it.
 try:
     import folium
-    from folium import GeoJson, Map, Marker, PolyLine, Popup
+    from folium import PolyLine, Popup
 
     _FOLIUM_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -36,6 +36,7 @@ _SPEED_COLORS: dict[int | None, str] = {
     45: "#f46d43",
     50: "#d73027",
     55: "#a50026",
+    60: "#91001d",
     65: "#7b0014",
     70: "#4d0008",
 }

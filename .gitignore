@@ -1,3 +1,4 @@
+.env
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -6,3 +7,4 @@ build/
 .eggs/
 *.parquet
 *.gpkg
+.ipynb_checkpoints/

@@ -18,7 +18,6 @@ import re
 from typing import Any
 
 import geopandas as gpd
-import pandas as pd
 import requests
 from shapely.geometry import LineString, Point, shape
 
@@ -28,8 +27,17 @@ from shapely.geometry import LineString, Point, shape
 
 _MLY_GRAPH_URL = "https://graph.mapillary.com"
 _MLY_SPEED_PATTERN = re.compile(
-    r"regulatory--maximum-speed-limit--(\d+)", re.IGNORECASE
+    r"(?:regulatory|complementary)--(?:maximum-speed-limit(?:-led)?|night-speed-limit)-(\d+)",
+    re.IGNORECASE,
 )
+_MLY_SIGN_TYPE_PATTERN = re.compile(
+    r"(regulatory|complementary)--(maximum-speed-limit(?:-led)?|night-speed-limit)",
+    re.IGNORECASE,
+)
+# Mapillary sign style suffixes: g1 = Vienna Convention (km/h in most
+# countries), g2 = MUTCD / US (mph), g3 = varies by country.
+_MLY_STYLE_PATTERN = re.compile(r"--g(\d+)$", re.IGNORECASE)
+_KMH_TO_MPH = 0.621371
 _DEFAULT_CRS = "EPSG:4326"
 
 
@@ -38,28 +46,121 @@ _DEFAULT_CRS = "EPSG:4326"
 # ---------------------------------------------------------------------------
 
 
-def _mly_get(endpoint: str, token: str, params: dict[str, Any]) -> dict[str, Any]:
-    """Perform a single Mapillary Graph API GET request."""
+def _mly_get(
+    endpoint: str, token: str, params: dict[str, Any], max_retries: int = 3
+) -> dict[str, Any]:
+    """Perform a single Mapillary Graph API GET request with retry."""
+    import time
+
     params = dict(params)
     params["access_token"] = token
-    resp = requests.get(f"{_MLY_GRAPH_URL}/{endpoint}", params=params, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(
+                f"{_MLY_GRAPH_URL}/{endpoint}", params=params, timeout=60
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.ReadTimeout, requests.exceptions.HTTPError) as exc:
+            if isinstance(exc, requests.exceptions.HTTPError) and resp.status_code != 500:
+                raise
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(2 ** attempt)
 
 
-def _parse_speed_mph(value: str) -> int | None:
-    """Extract an integer mph value from a Mapillary object_value string.
+def _split_bbox(
+    bbox: tuple[float, float, float, float],
+) -> list[tuple[float, float, float, float]]:
+    """Split a bounding box into 4 quadrants."""
+    min_lon, min_lat, max_lon, max_lat = bbox
+    mid_lon = (min_lon + max_lon) / 2
+    mid_lat = (min_lat + max_lat) / 2
+    return [
+        (min_lon, min_lat, mid_lon, mid_lat),  # SW
+        (mid_lon, min_lat, max_lon, mid_lat),  # SE
+        (min_lon, mid_lat, mid_lon, max_lat),  # NW
+        (mid_lon, mid_lat, max_lon, max_lat),  # NE
+    ]
 
-    Mapillary encodes speed limits as
-    ``regulatory--maximum-speed-limit--<speed>`` where *<speed>* is in
-    the native unit of the country.  For the US demo area we assume mph.
+
+def _mly_paginated_fetch(
+    endpoint: str,
+    token: str,
+    bbox: tuple[float, float, float, float],
+    fields: str,
+    extra_params: dict[str, Any] | None = None,
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    """Fetch results from a Mapillary endpoint, subdividing on 500 errors."""
+    min_lon, min_lat, max_lon, max_lat = bbox
+    bbox_str = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+
+    params: dict[str, Any] = {"fields": fields, "bbox": bbox_str, "limit": limit}
+    if extra_params:
+        params.update(extra_params)
+
+    try:
+        data = _mly_get(endpoint, token, params)
+        return data.get("data", [])
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 500:
+            all_data: list[dict[str, Any]] = []
+            for sub_bbox in _split_bbox(bbox):
+                all_data.extend(
+                    _mly_paginated_fetch(
+                        endpoint, token, sub_bbox, fields,
+                        extra_params, limit,
+                    )
+                )
+            return all_data
+        raise
+
+
+def _parse_speed_mph(value: str, unit: str = "mph") -> int | None:
+    """Extract a speed value from a Mapillary object_value string, in mph.
+
+    Matches the following Mapillary sign families:
+
+    * ``regulatory--maximum-speed-limit-<speed>``  (standard)
+    * ``complementary--maximum-speed-limit-<speed>``  (supplementary)
+    * ``regulatory--maximum-speed-limit-led-<speed>``  (LED/variable)
+    * ``regulatory--night-speed-limit-<speed>``  (night-time)
+
+    The numeric value on the sign is in the native unit of the country.
+    Use *unit* to specify what unit the sign values are in:
+
+    * ``"mph"`` — values are already miles-per-hour (US, UK).
+    * ``"kmh"`` — values are kilometres-per-hour; converted to mph.
 
     Returns ``None`` when the value cannot be parsed.
     """
     m = _MLY_SPEED_PATTERN.search(value)
-    if m:
-        return int(m.group(1))
-    return None
+    if not m:
+        return None
+    raw = int(m.group(1))
+    if unit == "kmh":
+        return round(raw * _KMH_TO_MPH)
+    return raw
+
+
+def _parse_sign_type(value: str) -> str:
+    """Classify a Mapillary speed-limit sign into a type category.
+
+    Returns one of ``"standard"``, ``"led"``, ``"night"``,
+    ``"complementary"``, or ``"unknown"``.
+    """
+    m = _MLY_SIGN_TYPE_PATTERN.search(value)
+    if not m:
+        return "unknown"
+    prefix, kind = m.group(1).lower(), m.group(2).lower()
+    if prefix == "complementary":
+        return "complementary"
+    if "led" in kind:
+        return "led"
+    if "night" in kind:
+        return "night"
+    return "standard"
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +172,7 @@ def fetch_mapillary_signs(
     bbox: tuple[float, float, float, float],
     token: str,
     speed_values: list[str] | None = None,
+    unit: str = "mph",
 ) -> gpd.GeoDataFrame:
     """Fetch speed limit sign detections from the Mapillary API.
 
@@ -82,57 +184,54 @@ def fetch_mapillary_signs(
         token: Mapillary access token.
         speed_values: Optional allow-list of ``object_value`` strings.  When
                       ``None``, all parseable speed limit signs are returned.
+        unit: Unit the sign values are in — ``"mph"`` (US/UK) or ``"kmh"``
+              (most other countries).  When ``"kmh"``, values are converted
+              to mph.
 
     Returns:
         GeoDataFrame with columns
-        ``id, geometry, speed_mph, raw_value, confidence, heading``.
+        ``id, geometry, speed_mph, raw_value, sign_type, confidence, heading``.
     """
-    min_lon, min_lat, max_lon, max_lat = bbox
-    bbox_str = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+    raw_data = _mly_paginated_fetch(
+        "map_features",
+        token,
+        bbox,
+        fields="id,geometry,object_value,value",
+        extra_params=None,
+    )
 
-    fields = "id,geometry,object_value,value,first_seen_at,last_seen_at"
-    params: dict[str, Any] = {
-        "fields": fields,
-        "bbox": bbox_str,
-        "object_value": "regulatory--maximum-speed-limit",
-        "limit": 2000,
-    }
-
+    seen_ids: set[str] = set()
     rows: list[dict[str, Any]] = []
-    while True:
-        data = _mly_get("map_features", token, params)
-        for feat in data.get("data", []):
-            raw = feat.get("object_value", "")
-            if speed_values and raw not in speed_values:
-                continue
-            mph = _parse_speed_mph(raw)
-            if mph is None:
-                continue
-            geom_data = feat.get("geometry", {})
-            if not geom_data:
-                continue
-            geom = shape(geom_data) if isinstance(geom_data, dict) else Point(geom_data)
-            rows.append(
-                {
-                    "id": feat["id"],
-                    "geometry": geom,
-                    "speed_mph": mph,
-                    "raw_value": raw,
-                    "confidence": feat.get("value", 1.0),
-                    "heading": None,  # Populated later via fetch_mapillary_images
-                }
-            )
-
-        cursor = data.get("paging", {}).get("next")
-        if not cursor:
-            break
-        params["after"] = cursor
-
-    if not rows:
-        return gpd.GeoDataFrame(
-            columns=["id", "geometry", "speed_mph", "raw_value", "confidence", "heading"],
-            crs=_DEFAULT_CRS,
+    for feat in raw_data:
+        fid = feat.get("id")
+        if fid in seen_ids:
+            continue
+        seen_ids.add(fid)
+        raw = feat.get("object_value", "")
+        if speed_values and raw not in speed_values:
+            continue
+        mph = _parse_speed_mph(raw, unit=unit)
+        if mph is None:
+            continue
+        geom_data = feat.get("geometry", {})
+        if not geom_data:
+            continue
+        geom = shape(geom_data) if isinstance(geom_data, dict) else Point(geom_data)
+        rows.append(
+            {
+                "id": fid,
+                "geometry": geom,
+                "speed_mph": mph,
+                "raw_value": raw,
+                "sign_type": _parse_sign_type(raw),
+                "confidence": feat.get("value", 1.0),
+                "heading": None,
+            }
         )
+
+    cols = ["id", "geometry", "speed_mph", "raw_value", "sign_type", "confidence", "heading"]
+    if not rows:
+        return gpd.GeoDataFrame(columns=cols, crs=_DEFAULT_CRS)
     return gpd.GeoDataFrame(rows, crs=_DEFAULT_CRS)
 
 
@@ -150,38 +249,33 @@ def fetch_mapillary_images(
         bbox: ``(min_lon, min_lat, max_lon, max_lat)`` in WGS-84.
         token: Mapillary access token.
     """
-    min_lon, min_lat, max_lon, max_lat = bbox
-    bbox_str = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+    raw_data = _mly_paginated_fetch(
+        "images", token, bbox, fields="id,sequence,geometry,compass_angle,captured_at"
+    )
 
-    fields = "id,sequence,geometry,compass_angle,captured_at"
-    params: dict[str, Any] = {
-        "fields": fields,
-        "bbox": bbox_str,
-        "limit": 2000,
-    }
-
+    seen_ids: set[str] = set()
     rows: list[dict[str, Any]] = []
-    while True:
-        data = _mly_get("images", token, params)
-        for img in data.get("data", []):
-            geom_data = img.get("geometry", {})
-            if not geom_data:
-                continue
-            geom = shape(geom_data) if isinstance(geom_data, dict) else Point(geom_data)
-            rows.append(
-                {
-                    "id": img["id"],
-                    "sequence_id": img.get("sequence", ""),
-                    "geometry": geom,
-                    "compass_angle": img.get("compass_angle"),
-                    "captured_at": img.get("captured_at"),
-                }
-            )
-
-        cursor = data.get("paging", {}).get("next")
-        if not cursor:
-            break
-        params["after"] = cursor
+    for img in raw_data:
+        img_id = img.get("id")
+        if img_id in seen_ids:
+            continue
+        seen_ids.add(img_id)
+        geom_data = img.get("geometry", {})
+        if not geom_data:
+            continue
+        geom = shape(geom_data) if isinstance(geom_data, dict) else Point(geom_data)
+        sequence = img.get("sequence", "")
+        if isinstance(sequence, dict):
+            sequence = sequence.get("id", "")
+        rows.append(
+            {
+                "id": img_id,
+                "sequence_id": sequence,
+                "geometry": geom,
+                "compass_angle": img.get("compass_angle"),
+                "captured_at": img.get("captured_at"),
+            }
+        )
 
     if not rows:
         return gpd.GeoDataFrame(
@@ -270,8 +364,12 @@ def fetch_overture_segments(
     if release:
         cmd += ["--release", release]
 
-    subprocess.run(cmd, check=True)
-    gdf = gpd.read_parquet(tmp_path)
+    try:
+        subprocess.run(cmd, check=True)
+        gdf = gpd.read_parquet(tmp_path)
+    finally:
+        import os
+        os.unlink(tmp_path)
     return gdf
 
 
@@ -302,7 +400,10 @@ def extract_overture_speed_limits(segments: gpd.GeoDataFrame) -> gpd.GeoDataFram
     def _pick_primary(cell: Any) -> int | None:
         if cell is None:
             return None
-        entries = cell if isinstance(cell, list) else []
+        try:
+            entries = list(cell)
+        except (TypeError, ValueError):
+            return None
         for entry in entries:
             if not isinstance(entry, dict):
                 continue

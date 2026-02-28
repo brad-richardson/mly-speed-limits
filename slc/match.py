@@ -7,14 +7,13 @@ reference positions (LR 0–1) on the Overture segment and a match quality score
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import geopandas as gpd
-from shapely.geometry import LineString, MultiPoint, Point
+from shapely.geometry import LineString, Point
 from shapely.strtree import STRtree
 
-from slc.fetch import angle_diff, haversine_distance, linestring_length_m
+from slc.fetch import angle_diff, bearing, haversine_distance, linestring_length_m
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -55,7 +54,6 @@ def project_edge_onto_segment(
         is the average perpendicular distance in metres.
     """
     sample_pts = _densify_line(edge, step_m=sample_step_m)
-    seg_len = linestring_length_m(segment)
 
     lrs: list[float] = []
     offsets: list[float] = []
@@ -81,7 +79,6 @@ def match_edges_to_overture(
     split_edges: gpd.GeoDataFrame,
     overture_segments: gpd.GeoDataFrame,
     max_distance_m: float = 25.0,
-    min_overlap_fraction: float = 0.3,
 ) -> gpd.GeoDataFrame:
     """Match split edges to Overture segments.
 
@@ -101,9 +98,6 @@ def match_edges_to_overture(
         split_edges: GeoDataFrame from :func:`slc.split.split_all_sequences`.
         overture_segments: GeoDataFrame from :func:`slc.fetch.fetch_overture_segments`.
         max_distance_m: Maximum mean perpendicular offset allowed.
-        min_overlap_fraction: Minimum fraction of the edge's length that must
-                              overlap with the candidate segment's LR range.
-                              Currently used as a soft filter.
 
     Returns:
         GeoDataFrame with columns
@@ -144,9 +138,7 @@ def match_edges_to_overture(
             # Bearing check
             seg_coords = list(seg_geom.coords)
             if len(seg_coords) >= 2:
-                from slc.fetch import bearing as _bearing
-
-                seg_hdg = _bearing(
+                seg_hdg = bearing(
                     seg_coords[0][0],
                     seg_coords[0][1],
                     seg_coords[-1][0],

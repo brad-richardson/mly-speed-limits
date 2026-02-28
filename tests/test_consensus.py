@@ -11,7 +11,6 @@ from slc.consensus import (
     detect_speed_zone_boundaries,
 )
 
-
 # ---------------------------------------------------------------------------
 # Unit helpers
 # ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ def test_compute_consensus_single_segment():
     assert row["overture_id"] == "seg_A"
     assert row["speed_mph"] == 35
     assert row["observation_count"] == 2
-    assert row["has_conflict"] == False
+    assert not row["has_conflict"]
 
 
 def test_compute_consensus_conflict():
@@ -108,7 +107,7 @@ def test_compute_consensus_conflict():
     )
     result = compute_consensus(matches)
     row = result.iloc[0]
-    assert row["has_conflict"] == True
+    assert row["has_conflict"]
 
 
 def test_compute_consensus_empty():

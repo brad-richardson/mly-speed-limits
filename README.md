@@ -6,8 +6,7 @@ image sequences, splitting those sequences into labeled edges, and matching the
 labeled edges to Overture road segments.
 
 **Output**: An Overture segment-level speed limit dataset with linear references,
-confidence scores, and a comparison against OSM `maxspeed` tags as a ground
-truth proxy.
+confidence scores, and evaluation against Overture's built-in `speed_limits`.
 
 ---
 
@@ -22,7 +21,7 @@ speed-limit-conflation/
 │   ├── split.py                  # Sequence splitting (signs + bearing change)
 │   ├── match.py                  # Split edge → Overture segment matching
 │   ├── consensus.py              # Multi-observation voting / LR assignment
-│   ├── evaluate.py               # OSM comparison, metrics, QA
+│   ├── evaluate.py               # Overture comparison, metrics, QA
 │   ├── viz.py                    # Folium map helpers
 │   └── types.py                  # Dataclasses: SpeedSign, SplitEdge, SpeedEstimate
 ├── notebooks/

@@ -1,7 +1,5 @@
 """Tests for slc.viz — color mapping and map construction."""
 
-import pytest
-
 from slc.viz import speed_color
 
 

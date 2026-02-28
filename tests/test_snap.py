@@ -1,7 +1,6 @@
 """Tests for slc.snap — sign-to-sequence projection."""
 
 import geopandas as gpd
-import pytest
 from shapely.geometry import LineString, Point
 
 from slc.snap import compute_bearing_at_position, snap_signs_to_sequences

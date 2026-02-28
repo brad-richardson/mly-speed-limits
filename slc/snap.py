@@ -7,7 +7,6 @@ likely on a cross street (heading disagreement) are rejected.
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import geopandas as gpd
@@ -52,7 +51,6 @@ def compute_bearing_at_position(
 
     # Normalised fractions for the window
     half = min(window_m, total_len / 2.0)
-    frac = distance_along / total_len if total_len > 0 else 0.5
 
     frac_before = max(0.0, (distance_along - half) / total_len)
     frac_after = min(1.0, (distance_along + half) / total_len)
@@ -105,7 +103,6 @@ def snap_signs_to_sequences(
     """
     if signs.empty or sequences.empty:
         import pandas as pd
-        from shapely.geometry import Point
         crs = signs.crs if not signs.empty else "EPSG:4326"
         return gpd.GeoDataFrame(
             {

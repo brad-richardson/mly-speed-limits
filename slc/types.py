@@ -15,7 +15,8 @@ class SpeedSign:
         id: Mapillary detection / object ID.
         geometry: Estimated sign location as a WGS-84 Point.
         speed_mph: Parsed speed limit in miles-per-hour.
-        raw_value: The raw Mapillary ``object_value`` string (e.g. ``"regulatory--maximum-speed-limit--35"``)
+        raw_value: The raw Mapillary ``object_value`` string
+                   (e.g. ``"regulatory--maximum-speed-limit--35"``).
         confidence: Mapillary detection confidence (0–1).
         heading: Camera compass heading at the moment of detection (degrees, 0 = north).
                  ``None`` when the image metadata is unavailable.

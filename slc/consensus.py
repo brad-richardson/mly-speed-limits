@@ -8,12 +8,10 @@ when a speed zone boundary is detected within the segment).
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import geopandas as gpd
-import pandas as pd
-
-from slc.types import SpeedEstimate
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -21,7 +19,7 @@ from slc.types import SpeedEstimate
 
 
 def _modal_speed(speeds: list[int]) -> int:
-    """Return the most common speed value (ties broken by highest count first)."""
+    """Return the most common speed value; in a tie, pick the lowest speed."""
     counts: dict[int, int] = {}
     for s in speeds:
         counts[s] = counts.get(s, 0) + 1
@@ -44,8 +42,6 @@ def _confidence(observation_count: int, agreement_ratio: float) -> float:
     This gives full weight to 100 % agreement with many observations and
     discounts lonely single-observation estimates.
     """
-    import math
-
     saturation = 1.0 - math.exp(-observation_count / 3.0)
     return round(agreement_ratio * saturation, 4)
 

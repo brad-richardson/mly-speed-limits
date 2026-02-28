@@ -1,8 +1,11 @@
 """Tests for slc.fetch utility functions (no network calls)."""
 
+import geopandas as gpd
 import pytest
+from shapely.geometry import LineString, Point
 
 from slc.fetch import (
+    _parse_sign_type,
     _parse_speed_mph,
     angle_diff,
     bearing,
@@ -11,9 +14,6 @@ from slc.fetch import (
     haversine_distance,
     linestring_length_m,
 )
-import geopandas as gpd
-from shapely.geometry import LineString, Point
-
 
 # ---------------------------------------------------------------------------
 # _parse_speed_mph
@@ -23,15 +23,57 @@ from shapely.geometry import LineString, Point
 @pytest.mark.parametrize(
     "value,expected",
     [
-        ("regulatory--maximum-speed-limit--35", 35),
-        ("regulatory--maximum-speed-limit--25", 25),
-        ("REGULATORY--MAXIMUM-SPEED-LIMIT--65", 65),
+        ("regulatory--maximum-speed-limit-35--g2", 35),
+        ("regulatory--maximum-speed-limit-25--g1", 25),
+        ("REGULATORY--MAXIMUM-SPEED-LIMIT-65--G1", 65),
+        ("complementary--maximum-speed-limit-15--g1", 15),
+        ("complementary--maximum-speed-limit-40--g1", 40),
+        # LED signs
+        ("regulatory--maximum-speed-limit-led-50--g1", 50),
+        ("regulatory--maximum-speed-limit-led-35--g3", 35),
+        # Night speed limits
+        ("regulatory--night-speed-limit-45--g1", 45),
+        ("regulatory--night-speed-limit-25--g1", 25),
+        # Truck signs are intentionally excluded
+        ("regulatory--truck-speed-limit-55--g1", None),
+        # Non-matches
+        ("regulatory--end-of-maximum-speed-limit-35--g1", None),
         ("unknown-sign-value", None),
         ("", None),
     ],
 )
 def test_parse_speed_mph(value, expected):
     assert _parse_speed_mph(value) == expected
+
+
+def test_parse_speed_mph_kmh_conversion():
+    """When unit='kmh', values are converted from km/h to mph."""
+    # 50 km/h ≈ 31 mph
+    assert _parse_speed_mph("regulatory--maximum-speed-limit-50--g1", unit="kmh") == 31
+    # 100 km/h ≈ 62 mph
+    assert _parse_speed_mph("regulatory--maximum-speed-limit-100--g1", unit="kmh") == 62
+    # 30 km/h ≈ 19 mph
+    assert _parse_speed_mph("regulatory--maximum-speed-limit-30--g1", unit="kmh") == 19
+
+
+# ---------------------------------------------------------------------------
+# _parse_sign_type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("regulatory--maximum-speed-limit-35--g2", "standard"),
+        ("complementary--maximum-speed-limit-15--g1", "complementary"),
+        ("regulatory--maximum-speed-limit-led-50--g1", "led"),
+        ("regulatory--night-speed-limit-45--g1", "night"),
+        ("regulatory--truck-speed-limit-55--g1", "unknown"),
+        ("unknown-sign-value", "unknown"),
+    ],
+)
+def test_parse_sign_type(value, expected):
+    assert _parse_sign_type(value) == expected
 
 
 # ---------------------------------------------------------------------------
