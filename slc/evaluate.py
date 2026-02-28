@@ -1,4 +1,10 @@
-"""Evaluation: compare our speed estimates against OSM maxspeed ground truth."""
+"""Evaluation: compare our speed estimates against Overture ground truth.
+
+Overture transportation segments carry a ``speed_limits`` property that is
+already normalized.  :func:`~slc.fetch.extract_overture_speed_limits` parses
+this into a ``speed_limit_value`` column, which we use directly as ground
+truth — no separate OSM fetch or spatial matching is needed.
+"""
 
 from __future__ import annotations
 
@@ -7,130 +13,54 @@ from typing import Any
 import geopandas as gpd
 import pandas as pd
 
+
 # ---------------------------------------------------------------------------
-# OSM matching
+# Overture-based comparison
 # ---------------------------------------------------------------------------
 
 
-def match_to_osm(
+def compare_to_overture(
     estimates: gpd.GeoDataFrame,
-    osm_ways: gpd.GeoDataFrame,
     overture_segments: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
-    """Spatially match our speed estimates to OSM ways for comparison.
+    """Compare our speed estimates against Overture's own speed limit values.
 
-    Both Overture and OSM geometries are derived from similar sources so the
-    geometries are close.  This function uses a simple buffer overlap approach:
-    for each Overture segment that has an estimate, find the OSM way with the
-    largest intersection area (buffered geometries).
+    Both datasets share the same ``overture_id`` / ``id`` key, so this is a
+    simple join — no spatial matching required.
 
     Args:
         estimates: GeoDataFrame from :func:`slc.consensus.compute_consensus`.
                    Must have columns ``overture_id, speed_mph``.
-        osm_ways: GeoDataFrame from :func:`slc.fetch.fetch_osm_maxspeed`.
-                  Must have columns ``osm_id, geometry, maxspeed_mph``.
         overture_segments: GeoDataFrame from
-                           :func:`slc.fetch.fetch_overture_segments`.
-                           Must have columns ``id, geometry``.
+                           :func:`slc.fetch.fetch_overture_segments` **after**
+                           calling :func:`slc.fetch.extract_overture_speed_limits`
+                           so that the ``speed_limit_value`` column is present.
 
     Returns:
         GeoDataFrame with columns
-        ``overture_id, our_speed_mph, osm_maxspeed_mph, osm_id, match_quality``.
+        ``overture_id, our_speed_mph, overture_speed_mph``.
+        Only segments that have *both* an estimate and an Overture speed limit
+        are included.
     """
-    if estimates.empty or osm_ways.empty or overture_segments.empty:
+    if estimates.empty or overture_segments.empty:
         return gpd.GeoDataFrame(
-            columns=[
-                "overture_id",
-                "our_speed_mph",
-                "osm_maxspeed_mph",
-                "osm_id",
-                "match_quality",
-            ]
+            columns=["overture_id", "our_speed_mph", "overture_speed_mph"]
         )
 
-    # Join estimates with Overture geometries
-    segs = overture_segments[["id", "geometry"]].rename(columns={"id": "overture_id"})
-    est_with_geom = estimates.merge(segs, on="overture_id", how="left")
+    id_col = "id" if "id" in overture_segments.columns else overture_segments.columns[0]
+    truth = overture_segments[[id_col, "speed_limit_value"]].rename(
+        columns={id_col: "overture_id", "speed_limit_value": "overture_speed_mph"}
+    )
 
-    if "geometry" not in est_with_geom.columns:
-        return gpd.GeoDataFrame(
-            columns=[
-                "overture_id",
-                "our_speed_mph",
-                "osm_maxspeed_mph",
-                "osm_id",
-                "match_quality",
-            ]
-        )
+    merged = estimates[["overture_id", "speed_mph"]].rename(
+        columns={"speed_mph": "our_speed_mph"}
+    ).merge(truth, on="overture_id", how="inner")
 
-    est_gdf = gpd.GeoDataFrame(est_with_geom, geometry="geometry", crs=overture_segments.crs)
+    # Keep only rows where Overture has a ground-truth value
+    merged = merged.dropna(subset=["overture_speed_mph"])
+    merged["overture_speed_mph"] = merged["overture_speed_mph"].astype(int)
 
-    # Project to a metres-based CRS for buffering
-    try:
-        est_proj = est_gdf.to_crs(epsg=3857)
-        osm_proj = osm_ways.to_crs(epsg=3857)
-    except Exception:
-        est_proj = est_gdf
-        osm_proj = osm_ways
-
-    buffer_m = 20.0
-    est_proj = est_proj.copy()
-    est_proj["_buf"] = est_proj.geometry.buffer(buffer_m)
-
-    osm_proj_idx = osm_proj.copy()
-    osm_proj_idx = osm_proj_idx.set_index("osm_id")
-
-    from shapely.strtree import STRtree
-
-    osm_geoms = list(osm_proj_idx.geometry)
-    tree = STRtree(osm_geoms)
-    osm_ids_list = list(osm_proj_idx.index)
-
-    rows: list[dict[str, Any]] = []
-    for _, est_row in est_proj.iterrows():
-        buf = est_row["_buf"]
-        cands = tree.query(buf)
-        best_osm_id = None
-        best_quality = 0.0
-
-        for idx in cands:
-            osm_geom = osm_geoms[idx]
-            try:
-                inter = buf.intersection(osm_geom.buffer(buffer_m))
-                quality = inter.area / buf.area if buf.area > 0 else 0.0
-            except Exception:
-                quality = 0.0
-
-            if quality > best_quality:
-                best_quality = quality
-                best_osm_id = osm_ids_list[idx]
-
-        if best_osm_id is None:
-            continue
-
-        osm_speed = osm_proj_idx.loc[best_osm_id, "maxspeed_mph"]
-        rows.append(
-            {
-                "overture_id": est_row["overture_id"],
-                "our_speed_mph": int(est_row["speed_mph"]),
-                "osm_maxspeed_mph": osm_speed,
-                "osm_id": best_osm_id,
-                "match_quality": round(float(best_quality), 4),
-            }
-        )
-
-    if not rows:
-        return gpd.GeoDataFrame(
-            columns=[
-                "overture_id",
-                "our_speed_mph",
-                "osm_maxspeed_mph",
-                "osm_id",
-                "match_quality",
-            ]
-        )
-
-    return gpd.GeoDataFrame(rows)
+    return gpd.GeoDataFrame(merged.reset_index(drop=True))
 
 
 # ---------------------------------------------------------------------------
@@ -139,15 +69,15 @@ def match_to_osm(
 
 
 def compute_metrics(comparison: gpd.GeoDataFrame) -> dict[str, Any]:
-    """Compute evaluation metrics comparing our estimates to OSM maxspeed.
+    """Compute evaluation metrics comparing our estimates to Overture speed limits.
 
     Args:
-        comparison: Output of :func:`match_to_osm`.
+        comparison: Output of :func:`compare_to_overture`.
 
     Returns:
         Dictionary with keys:
         ``exact_match_rate, within_5mph_rate, within_10mph_rate,
-        coverage, conflict_rate, n_estimates, n_with_osm, confusion_matrix``.
+        n_estimates, n_with_ground_truth, confusion_matrix``.
     """
     if comparison.empty:
         return {
@@ -155,12 +85,11 @@ def compute_metrics(comparison: gpd.GeoDataFrame) -> dict[str, Any]:
             "within_5mph_rate": None,
             "within_10mph_rate": None,
             "n_estimates": 0,
-            "n_with_osm": 0,
+            "n_with_ground_truth": 0,
             "confusion_matrix": {},
         }
 
-    # Only rows where OSM speed is available and parseable
-    valid = comparison.dropna(subset=["osm_maxspeed_mph", "our_speed_mph"])
+    valid = comparison.dropna(subset=["overture_speed_mph", "our_speed_mph"])
 
     n_total = len(comparison)
     n_valid = len(valid)
@@ -171,24 +100,23 @@ def compute_metrics(comparison: gpd.GeoDataFrame) -> dict[str, Any]:
             "within_5mph_rate": None,
             "within_10mph_rate": None,
             "n_estimates": n_total,
-            "n_with_osm": 0,
+            "n_with_ground_truth": 0,
             "confusion_matrix": {},
         }
 
     our = valid["our_speed_mph"].astype(int)
-    osm = valid["osm_maxspeed_mph"].astype(int)
-    diff = (our - osm).abs()
+    truth = valid["overture_speed_mph"].astype(int)
+    diff = (our - truth).abs()
 
     exact = int((diff == 0).sum())
     within5 = int((diff <= 5).sum())
     within10 = int((diff <= 10).sum())
 
-    # Confusion matrix: our_speed → osm_speed → count
     conf_matrix: dict[int, dict[int, int]] = {}
-    for our_val, osm_val in zip(our, osm):
+    for our_val, truth_val in zip(our, truth):
         conf_matrix.setdefault(int(our_val), {})
-        conf_matrix[int(our_val)][int(osm_val)] = (
-            conf_matrix[int(our_val)].get(int(osm_val), 0) + 1
+        conf_matrix[int(our_val)][int(truth_val)] = (
+            conf_matrix[int(our_val)].get(int(truth_val), 0) + 1
         )
 
     return {
@@ -196,7 +124,7 @@ def compute_metrics(comparison: gpd.GeoDataFrame) -> dict[str, Any]:
         "within_5mph_rate": round(within5 / n_valid, 4),
         "within_10mph_rate": round(within10 / n_valid, 4),
         "n_estimates": n_total,
-        "n_with_osm": n_valid,
+        "n_with_ground_truth": n_valid,
         "confusion_matrix": conf_matrix,
     }
 
@@ -205,7 +133,7 @@ def generate_report(comparison: gpd.GeoDataFrame, metrics: dict[str, Any]) -> st
     """Generate a Markdown summary of the evaluation results.
 
     Args:
-        comparison: Output of :func:`match_to_osm`.
+        comparison: Output of :func:`compare_to_overture`.
         metrics: Output of :func:`compute_metrics`.
 
     Returns:
@@ -216,9 +144,9 @@ def generate_report(comparison: gpd.GeoDataFrame, metrics: dict[str, Any]) -> st
         "",
         "## Coverage",
         f"- Total Overture segments with estimates: **{metrics.get('n_estimates', 0)}**",
-        f"- Segments matched to OSM for comparison: **{metrics.get('n_with_osm', 0)}**",
+        f"- Segments with Overture ground truth: **{metrics.get('n_with_ground_truth', 0)}**",
         "",
-        "## Accuracy vs OSM maxspeed",
+        "## Accuracy vs Overture speed limits",
     ]
 
     for key, label in [
@@ -234,21 +162,18 @@ def generate_report(comparison: gpd.GeoDataFrame, metrics: dict[str, Any]) -> st
 
     conf = metrics.get("confusion_matrix", {})
     if conf:
+        truth_vals = sorted({v for row in conf.values() for v in row})
         lines += [
             "",
-            "## Confusion Matrix (our estimate → OSM value → count)",
+            "## Confusion Matrix (our estimate → Overture value → count)",
             "",
-            "| Our \\ OSM | " + " | ".join(str(v) for v in sorted({
-                osm_val
-                for row in conf.values()
-                for osm_val in row
-            })) + " |",
+            "| Our \\ Overture | " + " | ".join(str(v) for v in truth_vals) + " |",
+            "| --- | " + " | ".join(["---"] * len(truth_vals)) + " |",
         ]
-        osm_vals = sorted({osm_val for row in conf.values() for osm_val in row})
-        lines.append("| --- | " + " | ".join(["---"] * len(osm_vals)) + " |")
         for our_val in sorted(conf):
             row_counts = conf[our_val]
-            cells = " | ".join(str(row_counts.get(v, 0)) for v in osm_vals)
+            cells = " | ".join(str(row_counts.get(v, 0)) for v in truth_vals)
             lines.append(f"| {our_val} | {cells} |")
 
     return "\n".join(lines) + "\n"
+

@@ -189,14 +189,12 @@ def map_split_edges(
 def map_estimates(
     estimates: gpd.GeoDataFrame,
     overture_segments: gpd.GeoDataFrame,
-    osm_ways: gpd.GeoDataFrame | None = None,
 ) -> Any:
     """Final result map: Overture segments colored by estimated speed limit.
 
     Args:
         estimates: GeoDataFrame from :func:`slc.consensus.compute_consensus`.
         overture_segments: Full Overture segments GeoDataFrame.
-        osm_ways: Optional OSM ways layer (dashed gray lines).
 
     Returns:
         :class:`folium.Map`.
@@ -213,12 +211,6 @@ def map_estimates(
     if not estimates.empty:
         for _, row in estimates.iterrows():
             speed_lookup[row["overture_id"]] = row.get("speed_mph")
-
-    # OSM background
-    if osm_ways is not None and not osm_ways.empty:
-        for _, row in osm_ways.iterrows():
-            coords = [(y, x) for x, y in row.geometry.coords]
-            PolyLine(coords, color="#aaaaaa", weight=1, opacity=0.4, dash_array="5").add_to(m)
 
     # Overture segments
     id_col = "id" if "id" in overture_segments.columns else overture_segments.columns[0]
@@ -242,17 +234,17 @@ def map_comparison(
     comparison: gpd.GeoDataFrame,
     overture_segments: gpd.GeoDataFrame,
 ) -> Any:
-    """Highlight agreement / disagreement between our estimates and OSM.
+    """Highlight agreement / disagreement between our estimates and Overture speed limits.
 
     Color coding:
-    * **Green** — exact match with OSM.
+    * **Green** — exact match with Overture.
     * **Yellow** — within 5 mph.
     * **Orange** — within 10 mph.
     * **Red** — more than 10 mph off.
-    * **Gray** — no OSM data available.
+    * **Gray** — no Overture ground truth available.
 
     Args:
-        comparison: Output of :func:`slc.evaluate.match_to_osm`.
+        comparison: Output of :func:`slc.evaluate.compare_to_overture`.
         overture_segments: Full Overture segments GeoDataFrame.
 
     Returns:
@@ -278,15 +270,15 @@ def map_comparison(
 
         if comp is None:
             color = "#aaaaaa"
-            popup_text = f"Segment {seg_id}: no OSM comparison"
+            popup_text = f"Segment {seg_id}: no ground truth"
         else:
             our = comp.get("our_speed_mph")
-            osm = comp.get("osm_maxspeed_mph")
-            if our is None or osm is None:
+            truth = comp.get("overture_speed_mph")
+            if our is None or truth is None:
                 color = "#aaaaaa"
                 popup_text = f"Segment {seg_id}: missing data"
             else:
-                diff = abs(int(our) - int(osm))
+                diff = abs(int(our) - int(truth))
                 if diff == 0:
                     color = "#2ca25f"
                 elif diff <= 5:
@@ -295,7 +287,10 @@ def map_comparison(
                     color = "#fd8d3c"
                 else:
                     color = "#e31a1c"
-                popup_text = f"Segment {seg_id}: ours={our} mph, OSM={osm} mph (Δ{diff})"
+                popup_text = (
+                    f"Segment {seg_id}: ours={our} mph, "
+                    f"Overture={truth} mph (Δ{diff})"
+                )
 
         coords = [(y, x) for x, y in row.geometry.coords]
         PolyLine(

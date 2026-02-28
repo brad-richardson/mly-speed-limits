@@ -254,17 +254,20 @@ def split_all_sequences(
             )
 
     if not all_edges:
+        import pandas as pd
+        crs = sequences.crs if not sequences.empty else "EPSG:4326"
         return gpd.GeoDataFrame(
-            columns=[
-                "edge_id",
-                "sequence_id",
-                "geometry",
-                "speed_mph",
-                "split_reason",
-                "length_m",
-                "avg_heading",
-            ],
-            crs=sequences.crs if not sequences.empty else "EPSG:4326",
+            {
+                "edge_id": pd.Series(dtype="object"),
+                "sequence_id": pd.Series(dtype="object"),
+                "geometry": gpd.GeoSeries(dtype="geometry"),
+                "speed_mph": pd.Series(dtype="object"),
+                "split_reason": pd.Series(dtype="object"),
+                "length_m": pd.Series(dtype="float64"),
+                "avg_heading": pd.Series(dtype="float64"),
+            },
+            geometry="geometry",
+            crs=crs,
         )
 
     return gpd.GeoDataFrame(all_edges, crs=sequences.crs)

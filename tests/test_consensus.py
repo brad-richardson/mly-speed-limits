@@ -21,9 +21,9 @@ def test_modal_speed_majority():
     assert _modal_speed([35, 35, 45]) == 35
 
 
-def test_modal_speed_tie_broken_by_highest():
-    # Tie: both appear once → max wins by our tiebreak
-    assert _modal_speed([35, 45]) == 45
+def test_modal_speed_tie_broken_by_lowest():
+    # Tie: both appear once → lower speed wins (conservative tiebreak)
+    assert _modal_speed([35, 45]) == 35
 
 
 def test_agreement_ratio_full():
@@ -82,7 +82,7 @@ def test_compute_consensus_single_segment():
     assert row["overture_id"] == "seg_A"
     assert row["speed_mph"] == 35
     assert row["observation_count"] == 2
-    assert row["has_conflict"] is False
+    assert row["has_conflict"] == False
 
 
 def test_compute_consensus_conflict():
@@ -108,7 +108,7 @@ def test_compute_consensus_conflict():
     )
     result = compute_consensus(matches)
     row = result.iloc[0]
-    assert row["has_conflict"] is True
+    assert row["has_conflict"] == True
 
 
 def test_compute_consensus_empty():

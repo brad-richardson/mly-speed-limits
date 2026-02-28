@@ -58,12 +58,12 @@ pytest tests/
 
 | Step | Module | Description |
 |------|--------|-------------|
-| 1 | `fetch` | Fetch Mapillary signs, images, Overture segments, OSM ways |
+| 1 | `fetch` | Fetch Mapillary signs, images; Overture segments (includes normalized speed limits) |
 | 2 | `snap` | Project each sign onto the nearest qualifying sequence |
 | 3 | `split` | Split sequences at sign locations and turn points |
 | 4 | `match` | Match labeled split edges to Overture segments (with LR) |
 | 5 | `consensus` | Aggregate multiple observations per segment |
-| 6 | `evaluate` | Compare against OSM `maxspeed`, compute metrics |
+| 6 | `evaluate` | Compare against Overture's own `speed_limits` values, compute metrics |
 
 ---
 

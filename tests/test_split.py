@@ -120,16 +120,19 @@ def test_split_all_sequences_basic():
         ],
         crs="EPSG:4326",
     )
+    import pandas as pd
+
     snapped = gpd.GeoDataFrame(
-        columns=[
-            "sign_id",
-            "sequence_id",
-            "snap_distance_m",
-            "distance_along_m",
-            "heading_agreement",
-            "projected_point",
-            "speed_mph",
-        ],
+        {
+            "sign_id": pd.Series(dtype="object"),
+            "sequence_id": pd.Series(dtype="object"),
+            "snap_distance_m": pd.Series(dtype="float64"),
+            "distance_along_m": pd.Series(dtype="float64"),
+            "heading_agreement": pd.Series(dtype="bool"),
+            "projected_point": gpd.GeoSeries(dtype="geometry"),
+            "speed_mph": pd.Series(dtype="int64"),
+        },
+        geometry="projected_point",
         crs="EPSG:4326",
     )
     result = split_all_sequences(seqs, snapped)
@@ -139,12 +142,27 @@ def test_split_all_sequences_basic():
 
 
 def test_split_all_sequences_empty():
+    import pandas as pd
+
     empty_seqs = gpd.GeoDataFrame(
-        columns=["sequence_id", "geometry", "image_count", "image_headings"],
+        {
+            "sequence_id": pd.Series(dtype="object"),
+            "geometry": gpd.GeoSeries(dtype="geometry"),
+            "image_count": pd.Series(dtype="int64"),
+            "image_headings": pd.Series(dtype="object"),
+        },
+        geometry="geometry",
         crs="EPSG:4326",
     )
     empty_signs = gpd.GeoDataFrame(
-        columns=["sign_id", "sequence_id", "distance_along_m", "speed_mph"],
+        {
+            "sign_id": pd.Series(dtype="object"),
+            "sequence_id": pd.Series(dtype="object"),
+            "distance_along_m": pd.Series(dtype="float64"),
+            "speed_mph": pd.Series(dtype="int64"),
+            "projected_point": gpd.GeoSeries(dtype="geometry"),
+        },
+        geometry="projected_point",
         crs="EPSG:4326",
     )
     result = split_all_sequences(empty_seqs, empty_signs)

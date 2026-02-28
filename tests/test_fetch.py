@@ -3,11 +3,11 @@
 import pytest
 
 from slc.fetch import (
-    _parse_maxspeed_tag,
     _parse_speed_mph,
     angle_diff,
     bearing,
     build_sequences,
+    extract_overture_speed_limits,
     haversine_distance,
     linestring_length_m,
 )
@@ -35,25 +35,73 @@ def test_parse_speed_mph(value, expected):
 
 
 # ---------------------------------------------------------------------------
-# _parse_maxspeed_tag
+# extract_overture_speed_limits
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        ("35 mph", 35),
-        ("35mph", 35),
-        ("35", 35),
-        ("56 km/h", 35),  # 56 km/h ≈ 34.8 → rounds to 35
-        ("56 kmh", 35),
-        ("", None),
-        ("national", None),
-    ],
-)
-def test_parse_maxspeed_tag(value, expected):
-    result = _parse_maxspeed_tag(value)
-    assert result == expected
+def test_extract_overture_speed_limits_basic():
+    segs = gpd.GeoDataFrame(
+        [
+            {
+                "id": "seg_1",
+                "geometry": LineString([(-111.9, 40.88), (-111.88, 40.88)]),
+                "speed_limits": [{"max_speed": {"value": 35, "unit": "mph"}, "when": None}],
+            },
+            {
+                "id": "seg_2",
+                "geometry": LineString([(-111.9, 40.89), (-111.88, 40.89)]),
+                "speed_limits": [{"max_speed": {"value": 25, "unit": "mph"}, "when": None}],
+            },
+        ],
+        crs="EPSG:4326",
+    )
+    result = extract_overture_speed_limits(segs)
+    assert result.loc[result["id"] == "seg_1", "speed_limit_value"].iloc[0] == 35
+    assert result.loc[result["id"] == "seg_2", "speed_limit_value"].iloc[0] == 25
+
+
+def test_extract_overture_speed_limits_no_column():
+    segs = gpd.GeoDataFrame(
+        [{"id": "seg_1", "geometry": LineString([(-111.9, 40.88), (-111.88, 40.88)])}],
+        crs="EPSG:4326",
+    )
+    result = extract_overture_speed_limits(segs)
+    assert "speed_limit_value" in result.columns
+    assert result["speed_limit_value"].iloc[0] is None
+
+
+def test_extract_overture_speed_limits_prefers_unconditional():
+    """When both conditional and unconditional entries exist, pick unconditional."""
+    segs = gpd.GeoDataFrame(
+        [
+            {
+                "id": "seg_1",
+                "geometry": LineString([(-111.9, 40.88), (-111.88, 40.88)]),
+                "speed_limits": [
+                    {"max_speed": {"value": 20, "unit": "mph"}, "when": {"time": "school"}},
+                    {"max_speed": {"value": 35, "unit": "mph"}, "when": None},
+                ],
+            }
+        ],
+        crs="EPSG:4326",
+    )
+    result = extract_overture_speed_limits(segs)
+    assert result["speed_limit_value"].iloc[0] == 35
+
+
+def test_extract_overture_speed_limits_null_entry():
+    segs = gpd.GeoDataFrame(
+        [
+            {
+                "id": "seg_1",
+                "geometry": LineString([(-111.9, 40.88), (-111.88, 40.88)]),
+                "speed_limits": None,
+            }
+        ],
+        crs="EPSG:4326",
+    )
+    result = extract_overture_speed_limits(segs)
+    assert result["speed_limit_value"].iloc[0] is None
 
 
 # ---------------------------------------------------------------------------

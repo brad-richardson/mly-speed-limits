@@ -6,6 +6,9 @@ Two usage modes:
   Overture CLI.  Suitable for city-sized bounding boxes.
 * **Bulk pipeline** — swap to reading the full Mapillary dump (parquet /
   flatgeobuf) and Overture parquet from S3.  The signatures stay the same.
+
+Ground truth for evaluation comes directly from the Overture segment
+``speed_limits`` property — no separate OSM fetch is required.
 """
 
 from __future__ import annotations
@@ -272,89 +275,60 @@ def fetch_overture_segments(
     return gdf
 
 
-def fetch_osm_maxspeed(
-    bbox: tuple[float, float, float, float],
-) -> gpd.GeoDataFrame:
-    """Fetch OSM ways with ``maxspeed`` tags via the Overpass API.
+def extract_overture_speed_limits(segments: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Parse the ``speed_limits`` column of an Overture segments GeoDataFrame.
 
-    Used as a ground-truth proxy for evaluation.
+    Overture transportation segments carry a ``speed_limits`` field that is
+    already normalized — each entry is a struct with a ``max_speed`` sub-struct
+    containing ``value`` (int) and ``unit`` (string, e.g. ``"mph"``).
+
+    This function picks the primary unconditional max speed for each segment
+    (first entry where ``when`` is absent or ``None``) and adds it as a new
+    ``speed_limit_value`` column.  Segments without a parseable speed limit
+    receive ``None``.
 
     Args:
-        bbox: ``(min_lon, min_lat, max_lon, max_lat)`` in WGS-84.
+        segments: GeoDataFrame returned by :func:`fetch_overture_segments`.
 
     Returns:
-        GeoDataFrame with columns ``osm_id, geometry, maxspeed, name``.
-        Only ways that carry a ``maxspeed`` tag are returned.
+        The same GeoDataFrame with an additional ``speed_limit_value`` column
+        (int or ``None``).
     """
-    min_lon, min_lat, max_lon, max_lat = bbox
-    # Overpass uses (south, west, north, east)
-    overpass_bbox = f"{min_lat},{min_lon},{max_lat},{max_lon}"
+    if "speed_limits" not in segments.columns:
+        segments = segments.copy()
+        segments["speed_limit_value"] = None
+        return segments
 
-    query = f"""
-    [out:json][timeout:60];
-    way["maxspeed"]({overpass_bbox});
-    out geom;
-    """
-
-    resp = requests.post(
-        "https://overpass-api.de/api/interpreter",
-        data={"data": query},
-        timeout=90,
-    )
-    resp.raise_for_status()
-    result = resp.json()
-
-    rows: list[dict[str, Any]] = []
-    for element in result.get("elements", []):
-        if element.get("type") != "way":
-            continue
-        nodes = element.get("geometry", [])
-        if len(nodes) < 2:
-            continue
-        coords = [(n["lon"], n["lat"]) for n in nodes]
-        tags = element.get("tags", {})
-        maxspeed_raw = tags.get("maxspeed", "")
-        mph = _parse_maxspeed_tag(maxspeed_raw)
-        rows.append(
-            {
-                "osm_id": element["id"],
-                "geometry": LineString(coords),
-                "maxspeed": maxspeed_raw,
-                "maxspeed_mph": mph,
-                "name": tags.get("name", ""),
-            }
-        )
-
-    if not rows:
-        return gpd.GeoDataFrame(
-            columns=["osm_id", "geometry", "maxspeed", "maxspeed_mph", "name"],
-            crs=_DEFAULT_CRS,
-        )
-    return gpd.GeoDataFrame(rows, crs=_DEFAULT_CRS)
-
-
-def _parse_maxspeed_tag(value: str) -> int | None:
-    """Parse an OSM ``maxspeed`` tag value into mph.
-
-    Handles plain integers (assumed mph in the US), ``XX mph``, and
-    ``XX km/h`` formats.  Returns ``None`` for unparseable values.
-    """
-    if not value:
+    def _pick_primary(cell: Any) -> int | None:
+        if cell is None:
+            return None
+        entries = cell if isinstance(cell, list) else []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            # Prefer unconditional entries (when is None / absent)
+            when = entry.get("when")
+            if when is not None:
+                continue
+            ms = entry.get("max_speed")
+            if isinstance(ms, dict):
+                val = ms.get("value")
+                if val is not None:
+                    return int(val)
+        # Fall back to first entry regardless of condition
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            ms = entry.get("max_speed")
+            if isinstance(ms, dict):
+                val = ms.get("value")
+                if val is not None:
+                    return int(val)
         return None
-    value = value.strip()
-    # "35 mph" or "35mph"
-    m = re.match(r"^(\d+)\s*mph$", value, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-    # "56 km/h" or "56kmh"
-    m = re.match(r"^(\d+)\s*km/?h$", value, re.IGNORECASE)
-    if m:
-        return int(round(int(m.group(1)) / 1.60934))
-    # bare integer — assume mph for US
-    m = re.match(r"^(\d+)$", value)
-    if m:
-        return int(m.group(1))
-    return None
+
+    result = segments.copy()
+    result["speed_limit_value"] = result["speed_limits"].apply(_pick_primary)
+    return result
 
 
 # ---------------------------------------------------------------------------

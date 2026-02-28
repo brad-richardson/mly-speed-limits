@@ -104,17 +104,21 @@ def snap_signs_to_sequences(
         heading_agreement, projected_point, speed_mph``.
     """
     if signs.empty or sequences.empty:
+        import pandas as pd
+        from shapely.geometry import Point
+        crs = signs.crs if not signs.empty else "EPSG:4326"
         return gpd.GeoDataFrame(
-            columns=[
-                "sign_id",
-                "sequence_id",
-                "snap_distance_m",
-                "distance_along_m",
-                "heading_agreement",
-                "projected_point",
-                "speed_mph",
-            ],
-            crs=signs.crs if not signs.empty else "EPSG:4326",
+            {
+                "sign_id": pd.Series(dtype="object"),
+                "sequence_id": pd.Series(dtype="object"),
+                "snap_distance_m": pd.Series(dtype="float64"),
+                "distance_along_m": pd.Series(dtype="float64"),
+                "heading_agreement": pd.Series(dtype="bool"),
+                "projected_point": gpd.GeoSeries(dtype="geometry"),
+                "speed_mph": pd.Series(dtype="int64"),
+            },
+            geometry="projected_point",
+            crs=crs,
         )
 
     # Build a spatial index on sequences
@@ -173,16 +177,18 @@ def snap_signs_to_sequences(
             )
 
     if not rows:
+        import pandas as pd
         return gpd.GeoDataFrame(
-            columns=[
-                "sign_id",
-                "sequence_id",
-                "snap_distance_m",
-                "distance_along_m",
-                "heading_agreement",
-                "projected_point",
-                "speed_mph",
-            ],
+            {
+                "sign_id": pd.Series(dtype="object"),
+                "sequence_id": pd.Series(dtype="object"),
+                "snap_distance_m": pd.Series(dtype="float64"),
+                "distance_along_m": pd.Series(dtype="float64"),
+                "heading_agreement": pd.Series(dtype="bool"),
+                "projected_point": gpd.GeoSeries(dtype="geometry"),
+                "speed_mph": pd.Series(dtype="int64"),
+            },
+            geometry="projected_point",
             crs=signs.crs,
         )
 
