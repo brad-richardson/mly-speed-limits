@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "speed-limit-conflation"
+version = "0.1.0"
+description = "Derive speed limit estimates for Overture segments from Mapillary sign detections"
+requires-python = ">=3.11"
+
+dependencies = [
+    "geopandas>=1.0",
+    "shapely>=2.0",
+    "pyarrow",
+    "requests",
+    "folium",
+    "lonboard",
+    "overturemaps>=0.9",
+    "matplotlib",
+    "pandas",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "jupyter", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["slc*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
